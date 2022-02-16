@@ -1,0 +1,137 @@
+/**
+ * Function to mask clouds based on the pixel_qa band of Landsat SR data.
+ * @param {ee.Image} image Input Landsat SR image
+ * @return {ee.Image} Cloudmasked Landsat image
+ */
+var cloudMaskL457 = function(image) {
+  var qa = image.select('pixel_qa');
+  // If the cloud bit (5) is set and the cloud confidence (7) is high
+  // or the cloud shadow bit is set (3), then it's a bad pixel.
+  var cloud = qa.bitwiseAnd(1 << 5)
+                  .and(qa.bitwiseAnd(1 << 7))
+                  .or(qa.bitwiseAnd(1 << 3));
+  // Remove edge pixels that don't occur in all bands
+  var mask2 = image.mask().reduce(ee.Reducer.min());
+  return image.updateMask(cloud.not()).updateMask(mask2);
+};
+
+// Adding spectral indices for land and water separation
+var addindices = function (img)
+{
+  // NDVI (Normalized Difference Vegetation Index - Rouse, 1973)
+  var ndvi = img.normalizedDifference(['B4','B3']).rename('NDVI'); 
+  
+  // NDWI (Normalized Difference Water Index - McFeeters, 1996)
+  var ndwi = img.normalizedDifference(['B2','B4']).rename('NDWI');
+  
+  // AWEI (Automated Water Extraction Index (AWEI) - Feyisa et al., 2014)
+  var awei = img.expression('4*(GREEN - SWIR1)-(0.25*NIR)+(2.75*SWIR2)',
+  {
+    'GREEN':img.select('B2'),
+    'NIR':img.select('B4'),
+    'SWIR1':img.select('B5'),
+    'SWIR2':img.select('B7'),
+  }).rename('AWEI');
+  
+  return img
+    .addBands(ndvi)
+    .addBands(ndwi)
+    .addBands(awei);
+};
+
+// Load landsat5
+var landsat05 = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+                  .filterDate('2000-01-01', '2000-12-31')
+                  .map(cloudMaskL457)
+                  .filterBounds(area)
+                  .map(addindices);
+// To find out about the metadata
+print(landsat05);
+
+// Composite Landsat-5 image collection and apply clip to area of interest
+var composite = landsat05
+              // Uses the median reducer
+              .median() 
+              // Clips the composite to our area of interest
+              .clip(area); 
+print(composite);
+
+// Declare visual parameter
+var visParams = {
+  bands: ['B3', 'B2', 'B1'],
+  min: 0,
+  max: 3000,
+  gamma: 1.4,
+};
+
+// To set the map into the area
+Map.centerObject(area, 13);	
+
+// Display true colour images
+Map.addLayer(composite, visParams,'trial');
+
+var NDWIparam = {bands:['NDWI'], min: -1, max: 1}; 
+  Map.addLayer(composite, NDWIparam, 'NDWI result');
+
+var AWEIparam = {bands:['AWEI'], min: -1, max: 1}; 
+  Map.addLayer(composite, AWEIparam, 'AWEI result');
+
+var NDVIparam = {bands:['NDVI'], min: -1, max: 1}; 
+  Map.addLayer(composite, NDWIparam, 'NDVI result');
+
+// Sample and training
+
+// Define and merge samples to include in the model
+var classes = land.merge(waterbody);
+
+// Define the bands you want to include in the model
+var bands = ['B1', 'B2','B3', 'B4', 'B5', 'B6', 'NDWI' ,'NDVI','AWEI'];
+
+// Assemble samples for the model
+var training = composite.select(bands).sampleRegions({
+collection : classes,
+properties : ['landcover'],
+scale : 30,
+tileScale : 8,
+geometries : true
+});
+
+// Random Forest
+// .smileRandomForest is used to run the model. Here, run the model using 80 trees
+var classifierrf = ee.Classifier.smileRandomForest(80).train({
+features:training,
+classProperty: 'landcover',
+inputProperties: bands,
+});
+
+// Run Clasification
+var classifiedrf = composite.select(bands).classify(classifierrf);
+
+// Display the Results of classification
+Map.addLayer(classifiedrf, {min: 0, max: 1, palette: ['red', 'blue']}, 'Result RF 01');
+
+// Export Images
+  Export.image.toDrive({
+    image: classifiedrf,
+    description: 'SDclassifiedrf_2000',
+    region: area,
+    scale: 30,
+    maxPixels: 1e13
+  });
+
+// Validation classification result
+
+// Merge validation samples nto one FeatureCollection
+var valclasses = vland.merge(vwaterbody);
+
+var validation = classifiedrf.sampleRegions({
+  collection: valclasses,
+  properties: ['landcover'],
+  scale: 30,
+});
+print(validation);
+
+// Compare the landcover of the validation data against the classification result
+var testAccuracy = validation.errorMatrix('landcover','classification')
+print('Validation error matrix RF: ', testAccuracy)
+print('Validation overall accuracy RF: ', testAccuracy.accuracy());

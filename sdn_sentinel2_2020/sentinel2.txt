@@ -1,0 +1,153 @@
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @param {ee.Image} image Sentinel-2 image
+ * @return {ee.Image} cloud masked Sentinel-2 image
+ */
+
+// Mask cloud Sentinel-2
+function maskS2clouds(image) 
+{
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000);
+}
+
+// Adding spectral indices for land and water separation
+var addindices = function (img)
+{
+  // NDVI (Normalized Difference Vegetation Index - Rouse, 1973)
+  var ndvi = img.normalizedDifference(['B8','B4']).rename('NDVI'); 
+  
+  // NDWI (Normalized Difference Water Index - McFeeters, 1996)
+  var ndwi = img.normalizedDifference(['B3','B8']).rename('NDWI');
+  
+  // AWEI (Automated Water Extraction Index (AWEI) - Feyisa et al., 2014)
+  var awei = img.expression('4*(GREEN - SWIR1)-(0.25*NIR)+(2.75*SWIR2)',
+  {
+    'GREEN':img.select('B3'),
+    'NIR':img.select('B8'),
+    'SWIR1':img.select('B11'),
+    'SWIR2':img.select('B12'),
+  }).rename('AWEI');
+  
+  return img
+    .addBands(ndvi)
+    .addBands(ndwi)
+    .addBands(awei);
+};
+
+// Load Sentinel-2
+var sentinel2 = ee.ImageCollection('COPERNICUS/S2_SR')
+                  // Select date distribution  
+                  .filterDate('2020-01-01', '2021-01-01')
+                  // Pre-filter to get less cloudy granules.
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',20))
+                  .filterBounds(area)
+                  // Apply mask
+                  .map(maskS2clouds)
+                  // Apply indices
+                  .map(addindices);
+                  // To find out about the metadata
+                  print(sentinel2);
+
+// Composite Sentinel-2 image collection and apply clip to area of interest
+var composite = sentinel2
+              // Uses the median reducer
+              .median() 
+              // Clips the composite to our area of interest
+              .clip(area); 
+print(composite)
+
+// Declare visual parameter
+var visPar = {bands:['B4','B3','B2'], min: 0, max: 0.3}; 
+// Display true colour images
+Map.addLayer(composite, visPar,'trial');
+
+var NDWIparam = {bands:['NDWI'], min: -1, max: 1}; 
+  Map.addLayer(composite, NDWIparam, 'NDWI result');
+
+var AWEIparam = {bands:['AWEI'], min: -1, max: 1}; 
+  Map.addLayer(composite, AWEIparam, 'AWEI result');
+
+var NDVIparam = {bands:['NDVI'], min: -1, max: 1}; 
+  Map.addLayer(composite, NDWIparam, 'NDVI result');
+
+// Sample and training
+
+// Define and merge samples to include in the model
+var classes = land.merge(waterbody)
+
+// Define the bands you want to include in the model
+var bands = ['B1', 'B2','B3', 'B4', 'B5', 'B6', 'B7','NDWI' ,'NDVI','AWEI'];
+
+// Assemble samples for the model
+var training = composite.select(bands).sampleRegions({
+collection : classes,
+properties : ['landcover'],
+scale : 20,
+tileScale : 8,
+geometries : true
+});
+
+// Train Classification
+
+// // Random Forest
+// // .smileRandomForest is used to run the model. Here, run the model using 50 trees
+// var classifierrf = ee.Classifier.smileRandomForest(50).train({
+// features: training,
+// classProperty: 'landcover',
+// inputProperties: bands,
+// });
+
+// Random Forest
+// .smileRandomForest is used to run the model. Here, run the model using 80 trees
+var classifierrf2 = ee.Classifier.smileRandomForest(80).train({
+features:training,
+classProperty: 'landcover',
+inputProperties: bands,
+});
+
+// Run Clasification
+// var classifiedrf = composite.select(bands).classify(classifierrf);
+var classifiedrf2 = composite.select(bands).classify(classifierrf2);
+
+// Display the Results of classification
+// Map.addLayer(classifiedrf, {min: 0, max: 1, palette: ['red', 'blue']}, 'Result RF 02');
+Map.addLayer(classifiedrf2, {min: 0, max: 1, palette: ['red', 'blue']}, 'Result RF 01');
+
+// Export Images
+  Export.image.toDrive({
+    image: classifiedrf2,
+    description: 'SDclassifiedrf2_2020',
+    region: area,
+    scale: 20,
+    maxPixels: 1e13
+  });
+
+// To set the map into the area
+Map.centerObject(area, 13);	
+
+// Validation classification result
+
+// Merge validation samples nto one FeatureCollection
+var valclasses = vland.merge(vwaterbody);
+
+var validation = classifiedrf2.sampleRegions({
+  collection: valclasses,
+  properties: ['landcover'],
+  scale: 20,
+});
+print(validation);
+
+// Compare the landcover of the validation data against the classification result
+var testAccuracy = validation.errorMatrix('landcover','classification')
+print('Validation error matrix RF: ', testAccuracy)
+print('Validation overall accuracy RF: ', testAccuracy.accuracy());
