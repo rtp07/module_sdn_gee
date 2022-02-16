@@ -8,7 +8,7 @@ Pengguna diharapkan dapat mengimplementasikan code tersebut ke dalam Google Eart
 
 ## Operation
 
-Sebelum dapat menggunakan, pengguna diharapkan meminta akses developer serta mendaftar pada Google Earth Engine (GEE). Pengguna dapat mengikuti video, silahkan meng-klik [Link ini](https://youtu.be/k3w93HIOjQg/). GEE merupakan aplikasi analisa spasial untuk akedimisi dan non-profit organization secara gratis dan berbayar untuk komersil menggunakan commercial licenses, untuk informasi lebih lanjut silahkan klik [disini](https://earthengine.google.com/faq/).
+Sebelum dapat menggunakan, pengguna diharapkan meminta akses developer serta mendaftar pada Google Earth Engine (GEE). Pengguna dapat mengikuti video, silahkan meng-klik [link ini](https://youtu.be/k3w93HIOjQg/). GEE merupakan aplikasi analisa spasial untuk akedimisi dan non-profit organization secara gratis dan berbayar untuk komersil menggunakan commercial licenses, untuk informasi lebih lanjut silahkan klik [disini](https://earthengine.google.com/faq/).
 
 Untuk dapat menjalankan code tersebut pengguna dapat:
 
